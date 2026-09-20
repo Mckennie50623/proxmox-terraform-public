@@ -1,0 +1,29 @@
+# コンパイルされたファイルや履歴
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.plan
+
+# ★重要★ 秘密情報が入った変数は絶対に除外！
+*.tfvars
+*.tfvars.json
+
+# ログファイルなど
+crash.log
+override.tf
+override.tf.json
+.terraform.lock.hcl
+
+# ★重要★ Kubernetes Secret（機密情報）は除外
+k8s/**/*secret*.yaml
+k8s/**/*secret*.yml
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+kubeconfig
+kubeconfig.*

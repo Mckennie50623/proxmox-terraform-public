@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: couchdb
+  namespace: obsidian-sync
+spec:
+  serviceName: couchdb
+  replicas: 1
+  selector:
+    matchLabels:
+      app: couchdb
+  template:
+    metadata:
+      labels:
+        app: couchdb
+    spec:
+      securityContext:
+        fsGroup: 5984
+      initContainers:
+      - name: init-config
+        image: busybox:1
+        command:
+        - sh
+        - -c
+        - cp /tmp/config/local.ini /opt/couchdb/etc/local.d/local.ini
+        volumeMounts:
+        - name: config-source
+          mountPath: /tmp/config
+        - name: config-target
+          mountPath: /opt/couchdb/etc/local.d
+      containers:
+      - name: couchdb
+        image: couchdb:3
+        ports:
+        - containerPort: 5984
+        env:
+        - name: COUCHDB_USER
+          valueFrom:
+            secretKeyRef:
+              name: couchdb-credentials
+              key: adminUsername
+        - name: COUCHDB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: couchdb-credentials
+              key: adminPassword
+        volumeMounts:
+        - name: couchdb-data
+          mountPath: /opt/couchdb/data
+        - name: config-target
+          mountPath: /opt/couchdb/etc/local.d
+      volumes:
+      - name: config-source
+        configMap:
+          name: couchdb-config
+      - name: config-target
+        emptyDir: {}
+  volumeClaimTemplates:
+  - metadata:
+      name: couchdb-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: local-path
+      resources:
+        requests:
+          storage: 5Gi

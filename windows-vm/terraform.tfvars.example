@@ -1,0 +1,7 @@
+# Documentation-only values; Windows VM resources are not implemented.
+pm_api_url          = "https://proxmox.example.com:8006/api2/json"
+pm_api_token_id     = "terraform@example!automation"
+pm_api_token_secret = "REPLACE_WITH_LOCAL_SECRET"
+target_node         = "example-proxmox"
+node_count          = 1
+template_vm_id      = 9100

@@ -1,0 +1,23 @@
+# Example only: replace station, schedule and keywords for permitted use.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: example-program-config
+  namespace: radio-recorder
+data:
+  STATION_ID: "EXAMPLE_STATION"
+  PROGRAM_WEEKDAY: "MON"
+  PROGRAM_START_TIME: "01:00"
+  PROGRAM_END_TIME: "02:00"
+  PROGRAM_TIMEZONE: "Asia/Tokyo"
+  CORNERS: |
+    [
+      {
+        "name": "Example segment",
+        "start_keywords": ["example-start"],
+        "end_keywords": ["example-end"],
+        "description": "Replace with the segment you are permitted to process"
+      }
+    ]
+  OUTPUT_DIR: "/data/radio"
+  GOOGLE_CREDENTIALS: "/app/credentials.json"

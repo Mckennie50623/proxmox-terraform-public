@@ -1,0 +1,672 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: radio-player-assets
+  namespace: radio-recorder
+data:
+  index.html: |
+    <!doctype html>
+    <html lang="ja">
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Radio Player</title>
+        <link rel="stylesheet" href="style.css">
+      </head>
+      <body>
+        <main class="app">
+          <section class="library">
+            <div class="section-header">
+              <h1>Radio Player</h1>
+              <button id="reloadButton" class="icon-button" type="button" aria-label="更新">↻</button>
+            </div>
+            <div id="episodeList" class="episode-list" aria-live="polite"></div>
+          </section>
+
+          <section class="player">
+            <div class="now-playing">
+              <p id="episodeDate" class="date"></p>
+              <h2 id="episodeTitle">エピソードを選択</h2>
+            </div>
+
+            <audio id="audio" preload="metadata" controls></audio>
+
+            <div class="controls">
+              <button id="backButton" type="button">-10s</button>
+              <label class="speed-control">
+                <span>速度</span>
+                <select id="speedSelect">
+                  <option value="0.8">0.8x</option>
+                  <option value="1" selected>1.0x</option>
+                  <option value="1.2">1.2x</option>
+                  <option value="1.5">1.5x</option>
+                  <option value="1.8">1.8x</option>
+                  <option value="2">2.0x</option>
+                </select>
+              </label>
+              <button id="forwardButton" type="button">+30s</button>
+            </div>
+
+            <div class="chapter-header">
+              <h3>チャプター</h3>
+              <div class="chapter-nav">
+                <button id="prevChapterButton" type="button">前へ</button>
+                <button id="nextChapterButton" type="button">次へ</button>
+              </div>
+            </div>
+            <div id="chapterList" class="chapter-list"></div>
+          </section>
+        </main>
+
+        <script src="app.js"></script>
+      </body>
+    </html>
+  app.js: |
+    const audio = document.querySelector("#audio");
+    const episodeList = document.querySelector("#episodeList");
+    const chapterList = document.querySelector("#chapterList");
+    const episodeTitle = document.querySelector("#episodeTitle");
+    const episodeDate = document.querySelector("#episodeDate");
+    const speedSelect = document.querySelector("#speedSelect");
+
+    let episodes = [];
+    let currentEpisode = null;
+    let currentChapters = [];
+    let activeChapterIndex = -1;
+
+    const fmt = new Intl.NumberFormat("ja-JP", { minimumIntegerDigits: 2 });
+    const REQUEST_TIMEOUT_MS = 5000;
+
+    document.querySelector("#reloadButton").addEventListener("click", loadLibrary);
+    document.querySelector("#backButton").addEventListener("click", () => seekBy(-10));
+    document.querySelector("#forwardButton").addEventListener("click", () => seekBy(30));
+    document.querySelector("#prevChapterButton").addEventListener("click", () => moveChapter(-1));
+    document.querySelector("#nextChapterButton").addEventListener("click", () => moveChapter(1));
+    speedSelect.addEventListener("change", () => {
+      audio.playbackRate = Number(speedSelect.value);
+    });
+    audio.addEventListener("timeupdate", updateActiveChapter);
+    audio.addEventListener("loadedmetadata", updateMediaSession);
+    audio.addEventListener("play", updateMediaSession);
+
+    loadLibrary();
+
+    async function loadLibrary() {
+      renderMessage(episodeList, "録音一覧を読み込み中");
+      renderMessage(chapterList, "エピソードを選択してください");
+
+      try {
+        const response = await fetchWithTimeout("../library.json");
+        if (!response.ok) throw new Error(`library.json: ${response.status}`);
+        const library = await response.json();
+        episodes = library.episodes || [];
+        renderEpisodes();
+      } catch (error) {
+        console.warn(error);
+        episodes = await loadEpisodesFromAutoindex();
+        renderEpisodes();
+      }
+    }
+
+    async function loadEpisodesFromAutoindex() {
+      try {
+        const response = await fetchWithTimeout("../episodes/");
+        if (!response.ok) throw new Error(`episodes/: ${response.status}`);
+        const html = await response.text();
+        const doc = new DOMParser().parseFromString(html, "text/html");
+        return [...doc.querySelectorAll("a")]
+          .map((link) => decodeURIComponent(link.getAttribute("href") || ""))
+          .filter((href) => /\.(m4a|mp3|aac)$/i.test(href))
+          .sort()
+          .reverse()
+          .map((href) => {
+            const filename = href.split("/").pop();
+            const id = filename.replace(/\.[^.]+$/, "");
+            return {
+              id,
+              title: id,
+              audio: `episodes/${filename}`,
+              chapters: `chapters/${id}.json`,
+            };
+          });
+      } catch (error) {
+        console.error(error);
+        renderMessage(episodeList, "録音一覧を読み込めませんでした");
+        return [];
+      }
+    }
+
+    function renderEpisodes() {
+      episodeList.innerHTML = "";
+      if (episodes.length === 0) {
+        renderMessage(episodeList, "録音ファイルがありません");
+        return;
+      }
+
+      for (const episode of episodes) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "episode-item";
+        button.dataset.episodeId = episode.id;
+        button.innerHTML = `
+          <span class="episode-title">${escapeHtml(episode.title || episode.id)}</span>
+          <span class="episode-meta">${escapeHtml(episode.broadcastDate || "")}</span>
+        `;
+        button.addEventListener("click", () => selectEpisode(episode));
+        episodeList.append(button);
+      }
+    }
+
+    async function selectEpisode(episode) {
+      currentEpisode = episode;
+      currentChapters = [];
+      activeChapterIndex = -1;
+
+      document.querySelectorAll(".episode-item").forEach((item) => {
+        item.classList.toggle("active", item.dataset.episodeId === episode.id);
+      });
+
+      episodeTitle.textContent = episode.title || episode.id;
+      episodeDate.textContent = episode.broadcastDate || "";
+      audio.src = `../${episode.audio}`;
+      audio.playbackRate = Number(speedSelect.value);
+
+      if (!episode.chapters) {
+        renderMessage(chapterList, "チャプターJSONがありません");
+        updateMediaSession();
+        return;
+      }
+
+      try {
+        const response = await fetchWithTimeout(`../${episode.chapters}`);
+        if (!response.ok) throw new Error(`${episode.chapters}: ${response.status}`);
+        const data = await response.json();
+        currentChapters = data.chapters || [];
+        renderChapters();
+      } catch (error) {
+        renderMessage(chapterList, "チャプターJSONを読み込めませんでした");
+        console.error(error);
+      }
+
+      updateMediaSession();
+    }
+
+    async function fetchWithTimeout(url, timeoutMs = REQUEST_TIMEOUT_MS) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await fetch(url, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    function renderChapters() {
+      chapterList.innerHTML = "";
+      if (currentChapters.length === 0) {
+        renderMessage(chapterList, "チャプターがありません");
+        return;
+      }
+
+      currentChapters.forEach((chapter, index) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "chapter-item";
+        button.dataset.chapterIndex = String(index);
+        button.innerHTML = `
+          <span class="chapter-time">${formatTime(chapter.startSec || 0)}</span>
+          <span class="chapter-title">${escapeHtml(chapter.title || `Chapter ${index + 1}`)}</span>
+        `;
+        button.addEventListener("click", () => seekToChapter(index));
+        chapterList.append(button);
+      });
+    }
+
+    function seekBy(seconds) {
+      if (!audio.src) return;
+      audio.currentTime = Math.max(0, audio.currentTime + seconds);
+    }
+
+    function seekToChapter(index) {
+      const chapter = currentChapters[index];
+      if (!chapter) return;
+      audio.currentTime = Math.max(0, Number(chapter.startSec || 0));
+      audio.play();
+    }
+
+    function moveChapter(direction) {
+      if (currentChapters.length === 0) return;
+      const baseIndex = activeChapterIndex < 0 ? 0 : activeChapterIndex;
+      const nextIndex = Math.min(currentChapters.length - 1, Math.max(0, baseIndex + direction));
+      seekToChapter(nextIndex);
+    }
+
+    function updateActiveChapter() {
+      const currentTime = audio.currentTime;
+      const index = currentChapters.findIndex((chapter, idx) => {
+        const start = Number(chapter.startSec || 0);
+        const fallbackEnd = currentChapters[idx + 1]?.startSec || Number.POSITIVE_INFINITY;
+        const end = Number(chapter.endSec || fallbackEnd);
+        return currentTime >= start && currentTime < end;
+      });
+
+      if (index === activeChapterIndex) return;
+      activeChapterIndex = index;
+      document.querySelectorAll(".chapter-item").forEach((item) => {
+        item.classList.toggle("active", Number(item.dataset.chapterIndex) === activeChapterIndex);
+      });
+    }
+
+    function updateMediaSession() {
+      if (!("mediaSession" in navigator) || !currentEpisode) return;
+
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: currentEpisode.title || currentEpisode.id,
+        artist: "radio-recorder",
+        album: currentEpisode.broadcastDate || "",
+      });
+      navigator.mediaSession.setActionHandler("previoustrack", () => moveChapter(-1));
+      navigator.mediaSession.setActionHandler("nexttrack", () => moveChapter(1));
+      navigator.mediaSession.setActionHandler("seekbackward", () => seekBy(-10));
+      navigator.mediaSession.setActionHandler("seekforward", () => seekBy(30));
+    }
+
+    function renderMessage(target, message) {
+      target.innerHTML = `<p class="empty">${escapeHtml(message)}</p>`;
+    }
+
+    function formatTime(seconds) {
+      const total = Math.max(0, Math.floor(Number(seconds) || 0));
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      const s = total % 60;
+      if (h > 0) return `${h}:${fmt.format(m)}:${fmt.format(s)}`;
+      return `${m}:${fmt.format(s)}`;
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+  style.css: |
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #18202a;
+      --muted: #657080;
+      --line: #d9dee7;
+      --accent: #1976d2;
+      --accent-soft: #e8f1fd;
+      --shadow: 0 8px 28px rgb(18 28 45 / 10%);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button,
+    select {
+      font: inherit;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+      gap: 20px;
+      max-width: 1120px;
+      min-height: 100dvh;
+      margin: 0 auto;
+      padding: 20px;
+    }
+
+    .library,
+    .player {
+      min-width: 0;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .library {
+      overflow: hidden;
+    }
+
+    .player {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      padding: 20px;
+    }
+
+    .section-header,
+    .chapter-header,
+    .controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .section-header {
+      padding: 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: 20px;
+    }
+
+    h2 {
+      font-size: 24px;
+      line-height: 1.25;
+    }
+
+    h3 {
+      font-size: 16px;
+    }
+
+    .date,
+    .episode-meta,
+    .empty {
+      color: var(--muted);
+    }
+
+    .date {
+      min-height: 22px;
+      margin-bottom: 4px;
+      font-size: 14px;
+    }
+
+    .icon-button,
+    .controls button,
+    .chapter-nav button {
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--text);
+    }
+
+    .icon-button {
+      width: 40px;
+      font-size: 22px;
+      line-height: 1;
+    }
+
+    .episode-list,
+    .chapter-list {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .episode-list {
+      max-height: calc(100dvh - 94px);
+      overflow: auto;
+    }
+
+    .episode-item,
+    .chapter-item {
+      display: grid;
+      width: 100%;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      background: transparent;
+      color: var(--text);
+      text-align: left;
+    }
+
+    .episode-item {
+      gap: 4px;
+      padding: 14px 16px;
+    }
+
+    .episode-title,
+    .chapter-title {
+      overflow-wrap: anywhere;
+    }
+
+    .episode-meta {
+      font-size: 13px;
+    }
+
+    .episode-item.active,
+    .chapter-item.active {
+      background: var(--accent-soft);
+    }
+
+    .episode-item:focus-visible,
+    .chapter-item:focus-visible,
+    .icon-button:focus-visible,
+    .controls button:focus-visible,
+    .chapter-nav button:focus-visible,
+    select:focus-visible {
+      outline: 3px solid rgb(25 118 210 / 35%);
+      outline-offset: 2px;
+    }
+
+    audio {
+      width: 100%;
+    }
+
+    .controls {
+      flex-wrap: wrap;
+    }
+
+    .controls button {
+      min-width: 86px;
+      padding: 0 14px;
+    }
+
+    .speed-control {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+    }
+
+    select {
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--text);
+      padding: 0 10px;
+    }
+
+    .chapter-nav {
+      display: flex;
+      gap: 8px;
+    }
+
+    .chapter-nav button {
+      padding: 0 12px;
+    }
+
+    .chapter-list {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .chapter-item {
+      grid-template-columns: 68px minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      padding: 12px;
+    }
+
+    .chapter-time {
+      color: var(--accent);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .empty {
+      padding: 16px;
+    }
+
+    @media (max-width: 760px) {
+      .app {
+        grid-template-columns: 1fr;
+        gap: 12px;
+        padding: 12px;
+      }
+
+      .episode-list {
+        max-height: 32dvh;
+      }
+
+      .player {
+        padding: 16px;
+      }
+
+      h2 {
+        font-size: 21px;
+      }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: radio-browser-nginx
+  namespace: radio-recorder
+data:
+  default.conf: |
+    server {
+      listen 80;
+      server_name _;
+
+      root /usr/share/nginx/html;
+      autoindex on;
+      autoindex_exact_size off;
+      autoindex_localtime on;
+
+      location / {
+        try_files $uri $uri/ =404;
+      }
+
+      location /player/ {
+        alias /opt/radio-player/;
+        try_files $uri $uri/ /player/index.html;
+      }
+
+      location = /library.json {
+        alias /usr/share/nginx/html/radio/library.json;
+      }
+
+      location ^~ /episodes/ {
+        alias /usr/share/nginx/html/radio/episodes/;
+        autoindex on;
+        autoindex_exact_size off;
+        autoindex_localtime on;
+        add_header Accept-Ranges bytes;
+      }
+
+      location ^~ /chapters/ {
+        alias /usr/share/nginx/html/radio/chapters/;
+        autoindex on;
+        autoindex_exact_size off;
+        autoindex_localtime on;
+      }
+
+      location ~* \.mp3$ {
+        add_header Accept-Ranges bytes;
+      }
+
+      location ~* \.(m4a|aac)$ {
+        add_header Accept-Ranges bytes;
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: radio-browser
+  namespace: radio-recorder
+  labels:
+    app: radio-browser
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: radio-browser
+  template:
+    metadata:
+      labels:
+        app: radio-browser
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: example-control-plane
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: radio-data
+              mountPath: /usr/share/nginx/html
+              readOnly: true
+            - name: player-assets
+              mountPath: /opt/radio-player
+              readOnly: true
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: default.conf
+              readOnly: true
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+      volumes:
+        - name: radio-data
+          persistentVolumeClaim:
+            claimName: radio-data-pvc
+            readOnly: true
+        - name: player-assets
+          configMap:
+            name: radio-player-assets
+        - name: nginx-config
+          configMap:
+            name: radio-browser-nginx
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: radio-browser
+  namespace: radio-recorder
+  labels:
+    app: radio-browser
+spec:
+  type: NodePort
+  selector:
+    app: radio-browser
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      nodePort: 30080

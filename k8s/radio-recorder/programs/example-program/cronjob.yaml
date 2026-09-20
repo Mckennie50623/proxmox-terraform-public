@@ -1,0 +1,60 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: example-program
+  namespace: radio-recorder
+  labels:
+    app: radio-recorder
+spec:
+  # Example schedule only; suspended to prevent accidental execution.
+  schedule: "0 3 * * 1"
+  suspend: true
+  timeZone: "Asia/Tokyo"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # タイムアウト: 録音(90分) + 処理(30分) の余裕を持って 2.5時間
+      activeDeadlineSeconds: 9000
+      template:
+        metadata:
+          labels:
+            app: radio-recorder
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: radio-recorder
+              # build-and-load.sh でビルド・インポートしたローカルイメージを使用
+              image: docker.io/library/radio-recorder:latest
+              imagePullPolicy: Never
+              envFrom:
+                - configMapRef:
+                    name: example-program-config
+                - secretRef:
+                    name: radio-recorder-secret
+              volumeMounts:
+                - name: radio-data
+                  mountPath: /data
+                - name: google-credentials
+                  mountPath: /app/credentials.json
+                  subPath: credentials.json
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+          volumes:
+            - name: radio-data
+              persistentVolumeClaim:
+                claimName: radio-data-pvc
+            - name: google-credentials
+              secret:
+                secretName: google-credentials
+            - name: tmp
+              emptyDir: {}

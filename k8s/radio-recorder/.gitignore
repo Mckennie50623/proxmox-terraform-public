@@ -1,0 +1,4 @@
+# 実際のシークレット（値を記入したファイル）は git 管理外
+# 空のテンプレート状態のまま push すること
+secret.yaml
+google-credentials.yaml

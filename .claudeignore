@@ -1,0 +1,14 @@
+# Kubernetes secrets
+k8s/radio-recorder/secret.yaml
+k8s/radio-recorder/google-credentials.yaml
+k8s/obsidian-sync/01-secret.yaml
+
+# Terraform state (may contain sensitive values)
+**/terraform.tfstate
+**/terraform.tfstate.backup
+
+# Terraform variable files with actual values
+**/terraform.tfvars
+
+# Terraform provider binaries
+**/.terraform/

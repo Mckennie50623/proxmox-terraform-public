@@ -1,0 +1,31 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: radio-recorder-netpol
+  namespace: radio-recorder
+spec:
+  podSelector:
+    matchLabels:
+      app: radio-recorder
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []  # 全インバウンド拒否
+  egress:
+    # DNS 名前解決（kube-dns）
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # radiko などインターネットへの HTTP/HTTPS
+    - ports:
+        - port: 80
+          protocol: TCP
+        - port: 443
+          protocol: TCP
+
+# 注意: NetworkPolicy はCNIプラグインのサポートが必要です。
+# k3s デフォルトの Flannel は NetworkPolicy を強制しません。
+# 有効にするには Calico または Cilium への切り替えが必要です。
+# 現状のまま適用しても害はありませんが、実際には機能しない場合があります。

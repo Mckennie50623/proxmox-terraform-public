@@ -1,0 +1,11 @@
+# Documentation-only values. Replace all values before plan/apply.
+# 192.0.2.0/24 and example.com are reserved examples, not a real network.
+pm_api_url          = "https://proxmox.example.com:8006/api2/json"
+pm_api_token_id     = "terraform@example!automation"
+pm_api_token_secret = "REPLACE_WITH_LOCAL_SECRET"
+target_node         = "example-proxmox"
+template_vm_id      = 9000
+ssh_key_file         = "/path/to/ssh/public-key.pub"
+ssh_private_key_file = "/path/to/ssh/private-key"
+vm_ipv4_cidr        = "192.0.2.20/24"
+network_gateway     = "192.0.2.1"
